@@ -182,6 +182,18 @@
               <h5 class="card-title">Add the data to request merchant funds</h5>
 
                 <form class="row g-3" id="paymentForm">
+
+                  <div class="col-lg-12">
+                    <div class="col-md-4">
+                      <div class="form-floating mb-3">
+                        <select class="form-select" id="customerSelect">
+                          <option  selected disabled="">Select a Customer</option>
+                        </select>
+                      <label for="customerSelect">Select Customer:</label>
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="col-md-12">
                     <div class="form-floating">
                       <input type="text" class="form-control" id="collectionName" name="name" placeholder="Collection Name" required disabled>
@@ -273,37 +285,42 @@
   <script src="assets/js/footer.js" type="text/javascript" defer></script>
   <script src="assets/js/main.js"></script>
 
-  <script>
-
-
+  <script type="text/javascript">
+    
 document.addEventListener("DOMContentLoaded", function() {
     const loginForm = document.getElementById("loginForm");
     const paymentForm = document.getElementById("paymentForm");
     const submitButton = paymentForm.querySelector("button[type='submit']");
     const formFields = paymentForm.querySelectorAll("input, select, button");
+    const clientSelect = document.getElementById("clientName");
+    const clientIdInput = document.getElementById("clientId");
 
     let authToken = null;
+    let selectedCustomerId = null; // Store selected customer globally
 
-    // FUNCTION: Disable all payment form fields
+    // Disable payment form initially
     function disablePaymentForm() {
         formFields.forEach(field => field.disabled = true);
     }
-
-    // FUNCTION: Enable all payment form fields
     function enablePaymentForm() {
         formFields.forEach(field => field.disabled = false);
     }
-
-    // Initially disable the payment form
     disablePaymentForm();
 
-    // LOGIN FORM HANDLER
+    // Function to decode JWT token
+    function decodeJWT(token) {
+        const payloadBase64 = token.split(".")[1]; // Get the payload part of the JWT
+        const payloadJSON = atob(payloadBase64);
+        return JSON.parse(payloadJSON);
+    }
+
+    // Login Form Submission
     loginForm.addEventListener("submit", async function(event) {
         event.preventDefault();
 
         const clientId = document.getElementById("username").value;
         const clientSecret = document.getElementById("password").value;
-        const authString = btoa(`${clientId}:${clientSecret}`); // Base64 encode client_id:client_secret
+        const authString = btoa(`${clientId}:${clientSecret}`);
 
         try {
             const response = await fetch("https://api.sandbox.toq.io/iam/oauth/token?grant_type=client_credentials", {
@@ -315,138 +332,145 @@ document.addEventListener("DOMContentLoaded", function() {
                 body: "grant_type=client_credentials"
             });
 
-            if (!response.ok) {
-                throw new Error("Login failed");
-            }
+            if (!response.ok) throw new Error("Login failed");
 
             const data = await response.json();
             authToken = data.access_token;
 
-            alert("Login successful!");
-            enablePaymentForm(); // Enable payment form after successful login
+            // Decode JWT and extract customer list
+            const decodedToken = decodeJWT(authToken);
+            const customers = decodedToken.customers || [];
 
-            // Call fetchClients only after login is successful and authToken is available
-            if (authToken) {
-                fetchClients(authToken);  // Pass the authToken explicitly to fetchClients
-            } else {
-                console.error("Auth token is not available.");
-            }
+            if (customers.length === 0) throw new Error("No customers found in token.");
 
+            populateCustomerDropdown(customers);
+            alert("Login successful! Please select a customer.");
+            enablePaymentForm();
         } catch (error) {
             alert(error.message);
         }
     });
 
-    // PAYMENT FORM SUBMISSION
+
+// Function to populate the customer dropdown
+function populateCustomerDropdown(customers) {
+    const customerSelect = document.getElementById("customerSelect");
+
+    // Enable dropdown and clear previous options
+    customerSelect.innerHTML = '<option value="">-- Select a Customer --</option>';
+    customerSelect.disabled = false;
+
+    customers.forEach(customerId => {
+        const option = document.createElement("option");
+        option.value = customerId;  // Since customers is an array of strings
+        option.textContent = customerId;  // Display customer ID as name
+        customerSelect.appendChild(option);
+    });
+
+    // Event listener to update selected customer ID
+    customerSelect.addEventListener("change", function() {
+        selectedCustomerId = customerSelect.value; // Store selected customer
+        console.log("Selected Customer ID:", selectedCustomerId);
+
+        if (selectedCustomerId) {
+            fetchClients(authToken, selectedCustomerId);
+        }
+    });
+}
+
+
+    // Fetch clients based on selected customer
+    async function fetchClients(authToken, customerId) {
+        if (!authToken || !customerId) return console.error("Auth token or customer ID is missing.");
+
+        try {
+            const response = await fetch(`https://api.sandbox.toq.io/iam/api/customers/${customerId}/clients/`, {
+                method: "GET",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${authToken}`
+                }
+            });
+
+            if (!response.ok) throw new Error("Failed to fetch clients");
+
+            const data = await response.json();
+            const clients = data.data;
+
+            clientSelect.innerHTML = '<option value="">-- Select a Client --</option>';
+            if (Array.isArray(clients)) {
+                clients.forEach(client => {
+                    const option = document.createElement("option");
+                    option.value = client.id;
+                    option.textContent = client.name;
+                    option.setAttribute("data-name", client.name);
+                    clientSelect.appendChild(option);
+                });
+            } else {
+                console.error("Expected an array of clients, but received:", clients);
+            }
+        } catch (error) {
+            console.error("Error fetching clients:", error);
+        }
+    }
+
+    // Handle client selection to update client ID input
+    clientSelect.addEventListener("change", function() {
+        const selectedOption = clientSelect.options[clientSelect.selectedIndex];
+        clientIdInput.value = selectedOption.value;
+        clientSelect.dataset.selectedName = selectedOption.getAttribute("data-name");
+    });
+
+    // Payment Form Submission
     paymentForm.addEventListener("submit", async function(event) {
         event.preventDefault();
 
-        if (!authToken) {
-            alert("You need to log in first.");
+        if (!authToken || !selectedCustomerId) {
+            alert("You need to log in and select a customer first.");
             return;
         }
 
-        // Get form values
-       const payload = {
-          name: document.getElementById('collectionName').value,
-          revenueCollection: [{
-              clientId: document.getElementById('clientId').value,
-              clientName: document.getElementById("clientName").dataset.selectedName, // Get stored client name
-              invoiceNumber: document.getElementById('invoiceNumber').value,
-              invoiceAmount: parseFloat(document.getElementById('invoiceAmount').value),
-              invoiceCurrency: document.getElementById('invoiceCurrency').value,
-              invoiceIssueDate: document.getElementById('invoiceIssueDate').value + "T00:00:00.000+00:00",
-              invoiceDueDate: document.getElementById('invoiceDueDate').value + "T00:00:00.000+00:00",
-              lineNumber: 1,
-              lineErrors: []
-          }]
-      };
-
+        const payload = {
+            name: document.getElementById("collectionName").value,
+            revenueCollection: [{
+                clientId: document.getElementById("clientId").value,
+                clientName: document.getElementById("clientName").value,
+                invoiceNumber: document.getElementById("invoiceNumber").value,
+                invoiceAmount: parseFloat(document.getElementById("invoiceAmount").value),
+                invoiceCurrency: document.getElementById("invoiceCurrency").value,
+                invoiceIssueDate: document.getElementById("invoiceIssueDate").value + "T00:00:00.000+00:00",
+                invoiceDueDate: document.getElementById("invoiceDueDate").value + "T00:00:00.000+00:00",
+                lineNumber: 1,
+                lineErrors: []
+            }]
+        };
 
         try {
-            const response = await fetch('https://api.sandbox.toq.io/wallet/api/customers/DEMOTOQIO/revenue', {
-                method: 'POST',
+            const response = await fetch(`https://api.sandbox.toq.io/wallet/api/customers/${selectedCustomerId}/revenue`, {
+                method: "POST",
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${authToken}`
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${authToken}`
                 },
                 body: JSON.stringify(payload),
             });
 
             if (response.ok) {
-                alert('Form submitted successfully!');
+                alert("Form submitted successfully!");
             } else {
                 const error = await response.json();
-                alert('Error: ' + error.message);
+                alert("Error: " + error.message);
             }
         } catch (error) {
-            console.error('Request failed:', error);
-            alert('An unexpected error occurred.');
+            console.error("Request failed:", error);
+            alert("An unexpected error occurred.");
         }
     });
 });
 
-// Updated fetchClients function to accept authToken as argument
-async function fetchClients(authToken) {
-  if (!authToken) {
-    console.error("Auth token is not defined. Cannot fetch clients.");
-    return;
-  }
-
-  try {
-    const response = await fetch("https://api.sandbox.toq.io/iam/api/customers/DEMOTOQIO/clients/", {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}` // Use the passed authToken
-      }
-    });
-
-    if (!response.ok) throw new Error("Failed to fetch clients");
-
-    const data = await response.json();
-    const clients = data.data; // Access the 'data' property which contains the array of clients
-    console.log(clients); // Log the clients array to check its structure
-
-    const clientSelect = document.getElementById("clientName");
-
-    // Ensure clients is an array before attempting to populate the dropdown
-    if (Array.isArray(clients)) {
-      clients.forEach(client => {
-        const option = document.createElement("option");
-        option.value = client.id;  // Store client ID
-        option.textContent = client.name;  // Display client name
-        option.setAttribute("data-name", client.name); // Store client name in a data attribute
-        clientSelect.appendChild(option);
-      });
-    } else {
-      console.error("Expected an array of clients, but received:", clients);
-    }
-  } catch (error) {
-    console.error("Error fetching clients:", error);
-  }
-}
-
-//Add client ID when selecting client Name
-
-document.addEventListener("DOMContentLoaded", function() {
-  const clientSelect = document.getElementById("clientName");
-  const clientIdInput = document.getElementById("clientId");
-
-  clientSelect.addEventListener("change", function() {
-    const selectedOption = clientSelect.options[clientSelect.selectedIndex]; // Get selected option
-    clientIdInput.value = selectedOption.value;  // Assign clientId
-    document.getElementById("clientName").dataset.selectedName = selectedOption.getAttribute("data-name"); // Store clientName
-  });
-});
 
 
-
-
-
-
-
-</script>
+  </script>
 
 
 </body>
