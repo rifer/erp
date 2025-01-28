@@ -384,7 +384,7 @@ function populateCustomerDropdown(customers) {
         if (!authToken || !customerId) return console.error("Auth token or customer ID is missing.");
 
         try {
-            const response = await fetch(`https://api.sandbox.toq.io/iam/api/customers/${customerId}/clients/`, {
+            const response = await fetch(`https://api.sandbox.toq.io/iam/api/customers/${customerId}/clients?pageSize=30&status=onboarded`, {
                 method: "GET",
                 headers: {
                     "Content-Type": "application/json",
